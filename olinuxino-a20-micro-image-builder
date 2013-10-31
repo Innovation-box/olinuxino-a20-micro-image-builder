@@ -381,7 +381,7 @@ function user-compile {
     # u-boot
     pushd u-boot-sunxi
     make distclean ${COMPILE_OPTIONS}
-    make A20-OLinuXino_MICRO ${COMPILE_OPTIONS}
+    make a20-olinuxino_micro ${COMPILE_OPTIONS}
     popd
     # kernel
     pushd linux-sunxi
