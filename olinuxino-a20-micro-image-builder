@@ -1,0 +1,478 @@
+#!/bin/bash -ex
+#
+# this script is based on http://linux-sunxi.org/Building_on_Debian and derivated from http://karme.de/olimex/olinuxino-a20-micro-image-builder
+# hackish script based on http://linux-sunxi.org/Building_on_Debian to
+# create a basic debian image for the olinuxino a20 micro
+# (s.a. http://linux-sunxi.org/A20-OLinuXino)
+#
+# This script is intended to be used in a clean debian/wheezy virtual
+# 
+#
+# latest version at:
+# http://karme.de/olimex/olinuxino-a20-micro-image-builder
+#
+# Notes:
+# - has to be run as root and is somewhat dangerous
+# - you need around 15G free disk space
+# - downloads code from github
+# - at the moment uses emdebian for cross compilation tool chain
+#   (if cross-compiling)
+# - script must be installed in path as it calls itself
+# - root password is root !
+# - consoles use auto-login (no password!)
+# - ideally the boards would be supported in mainline kernel
+#   s.a. http://linux-sunxi.org/Linux_mainlining_effort
+# - ideally one would add support for the board (and similar boards)
+#   to the debian installer and/or freedom-maker / freedombox
+# - maybe you want to take a look at more general Board Support
+#   Package (BSP) at http://linux-sunxi.org/BSP
+
+# keep the previous empty line for the help sub-command
+
+# Copyright (c) 2013 Jens Thiele <karme@karme.de>
+# 
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+# 
+# 1. Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in the
+#    documentation and/or other materials provided with the distribution.
+#
+# 3. Neither the name of the authors nor the names of its contributors
+#    may be used to endorse or promote products derived from this
+#    software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+# TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+# PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+# LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+# NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+# SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+# use ccache (note: we install ccache in setup)
+export PATH=/usr/lib/ccache:$PATH
+# debconf should not ask questions
+export DEBIAN_FRONTEND=noninteractive
+
+TARGETSUITE="wheezy"
+
+function cross-compile-options {
+    [ "$(dpkg-architecture -qDEB_HOST_ARCH)" = "armhf" ] \
+	|| echo "CROSS_COMPILE=arm-linux-gnueabihf-"
+}
+
+function cross-compile? {
+    test -n "$(cross-compile-options)"
+}
+
+# use gcc 4.7 (note: self-hosted build didn't work otherwise)
+# todo: shouldn't we set AS,LD,CPP... too then?
+COMPILE_OPTIONS="$(cross-compile-options) CC=arm-linux-gnueabihf-gcc-4.7"
+
+function setup-cross {
+    # for now use emdebian cross compilation tool chain
+    # todo: wasn't there a debian package to build cross compilation
+    # tool chains?!
+    cat <<EOF > /etc/apt/sources.list.d/emdebian.list
+deb http://www.emdebian.org/debian/ $(lsb_release -c -s) main
+deb http://www.emdebian.org/debian/ sid main
+EOF
+    apt-get -y install emdebian-archive-keyring qemu-user-static
+    apt-get update
+    apt-get -y install gcc-4.7-arm-linux-gnueabihf
+}
+
+function setup {
+    # todo:
+    # - skip squid installation if http_proxy is set? (note: using
+    #   squid instead of squid3 because squid3 didn't work well)
+    apt-get -y install build-essential libncurses5-dev u-boot-tools \
+    debootstrap git binfmt-support libusb-1.0-0-dev \
+    pkg-config dosfstools util-linux squid ccache sudo
+
+    if cross-compile?; then
+	setup-cross
+    else
+	apt-get -y install gcc-4.7
+    fi
+
+    # create user for download/compilation
+    if ! id imagebuilder; then
+	addgroup --system imagebuilder
+	adduser --system --ingroup imagebuilder imagebuilder
+    fi
+
+    sudo -E -H -u imagebuilder -s /bin/sh -c \
+	"cd ~ ; olinuxino-a20-micro-image-builder user-setup"
+}
+
+function make-image {
+    local CARD="$1"
+    test -z "$1" && CARD="olinuxino-a20-micro-debian.img"
+
+    local LOCKDIR=/run/olinuxino-a20-micro-image-builder
+    mkdir $LOCKDIR
+
+    sudo -E -H -u imagebuilder -s /bin/sh -c \
+	"cd ~ ; olinuxino-a20-micro-image-builder user-compile"
+
+    # total image size in bytes (for now use <4GB)
+    local SIZE=3600000000
+    local KERNELTREEDIR=~imagebuilder/linux-sunxi
+
+    # use local http proxy (note: we install squid in setup)
+    http_proxy=${http_proxy:-http://localhost:3128}
+    export http_proxy
+
+    apt-get install dosfstools util-linux
+
+    # remove the image file if it exists
+    # (safety measure in case parts are still mounted)
+    test -f $CARD && rm -v $CARD
+
+    # create sparse image file
+    dd if=/dev/zero of=$CARD bs=1 count=1 seek=$((SIZE-1))
+
+    # create partitions (for now use separate boot and root)
+    local RFSSIZE=$((((SIZE/512)-34816)/(1024*1024)*(1024*1024)))
+    cat <<EOF|sfdisk -q -L --no-reread $CARD
+# partition table of /dev/mmcblk0
+unit: sectors
+
+/dev/mmcblk0p1 : start=     2048, size=    32768, Id=83
+/dev/mmcblk0p2 : start=    34816, size= $RFSSIZE, Id=83
+/dev/mmcblk0p3 : start=        0, size=        0, Id= 0
+/dev/mmcblk0p4 : start=        0, size=        0, Id= 0
+EOF
+    # print it for debugging
+    sfdisk -q -L --no-reread -d $CARD
+
+    LOOPDEV=$(losetup -f --show $CARD)
+    # read partition table on loop device
+    partx -a $LOOPDEV
+    # create fs for boot (for now use vfat as i am not sure u-boot can
+    # read uEnv.txt from ext2/ext4)
+    mkfs.vfat -n boot -I ${LOOPDEV}p1
+    # create root fs
+    mkfs.ext4 -L debian_armhf ${LOOPDEV}p2
+    sync
+
+    # populate boot
+    mkdir $LOCKDIR/boot
+    mount ${LOOPDEV}p1 $LOCKDIR/boot
+    cp $KERNELTREEDIR/arch/arm/boot/uImage $LOCKDIR/boot
+    cp -v ~imagebuilder/sunxi-boards/sys_config/a20/*.{fex,bin} \
+	$LOCKDIR/boot
+    # choose default fex/script
+    cp -v $LOCKDIR/boot/a20-olinuxino_micro_lcd_800x480.bin \
+	$LOCKDIR/boot/script.bin
+    cat <<EOF > $LOCKDIR/boot/README
+debian/$TARGETSUITE image created using
+olinuxino-a20-micro-image-builder.
+
+Default setup is for usage with 7" LCD display at the moment.
+
+If you want to test hdmi copy a20-olinuxino_micro.bin to script.bin
+first! Additionally you might have to pass some kernel arguments.  For
+my iiyama lcd connected via HDMI<->DVI adapter I put the following
+line in uEnv.txt:
+extraargs=hdmi.audio=0 disp.screen0_output_mode=1280x1024p60
+EOF
+    # we can pass additional kernel arguments via uEnv.txt
+    # example: disable console blank on idle
+    #    cat <<EOF > $LOCKDIR/boot/uEnv.txt
+    #extraargs=consoleblank=0
+    #EOF
+    umount $LOCKDIR/boot
+    sync
+    rmdir $LOCKDIR/boot
+
+    # populate root fs
+
+    # select debian mirrors to fetch packages from
+    # todo: maybe extract from localhost?! detect fastest?!
+    # (use netselect? apt-spy?)
+    #MIRROR="http://ftp.debian.org/debian/"
+    local MIRROR="http://ftp.de.debian.org/debian/"
+
+    # (todo: maybe do not recreate root fs each time?)
+    mkdir -p $LOCKDIR/chroot-armhf
+    mount ${LOOPDEV}p2 $LOCKDIR/chroot-armhf
+    pushd $LOCKDIR/chroot-armhf
+    # todo: maybe use multistrap like freedom-maker does?
+    # see also: https://www.freedomboxfoundation.org/code/
+    # or maybe use qemu-debootstrap?
+    debootstrap --foreign --arch armhf $TARGETSUITE . $MIRROR
+    cp /usr/bin/qemu-arm-static usr/bin
+    LC_ALL=C LANGUAGE=C LANG=C chroot . /debootstrap/debootstrap --second-stage
+    LC_ALL=C LANGUAGE=C LANG=C chroot . dpkg --configure -a
+    echo -e 'root\nroot'|chroot . passwd
+    echo A20 > etc/hostname
+    sed -i 's,127.0.0.1\tlocalhost$,127.0.0.1\tlocalhost A20,' etc/hosts
+    cat <<EOF >> etc/network/interfaces
+# The primary network interface
+allow-hotplug eth0
+iface eth0 inet dhcp
+
+# wlan examples:
+# see also:
+# /usr/share/doc/wireless-tools/README.Debian
+
+# WPA AP
+# allow-hotplug wlan0
+# iface wlan0 inet dhcp
+#      wpa-ssid yourssid
+#      wpa-psk passphrase
+
+# ad-hoc wlan
+# iface wlan0 inet static
+#      address 192.168.42.1
+#      network 192.168.42.0
+#      netmask 255.255.255.0
+#      broadcast 192.168.42.255
+#      wireless-essid Home
+#      wireless-mode ad-hoc
+EOF
+    cat <<EOF > etc/apt/sources.list
+deb $MIRROR $TARGETSUITE main contrib non-free
+deb http://security.debian.org/ $TARGETSUITE/updates main contrib non-free
+EOF
+    # prepare to run some stuff on first boot
+    cat <<EOF > etc/rc.local
+#!/bin/bash -xe
+if test -f /etc/force-first-run; then
+	/usr/local/sbin/first-run
+fi
+exit 0
+EOF
+    touch etc/force-first-run
+    # script run on first boot
+    # todo: maybe resize parition/filesystem to use all space
+    # available
+    cat <<EOF > usr/local/sbin/first-run
+#!/bin/bash -xe
+# recreate ssh keys
+rm -vf /etc/ssh/ssh_host_*
+dpkg-reconfigure openssh-server
+rm -vf /etc/force-first-run
+EOF
+    chmod +x usr/local/sbin/first-run
+    (
+	export LC_ALL=C
+	export LANGUAGE=C
+	export LANG=C
+	RETRY=3
+	# todo: delay ssh key generation until first boot
+	while ! ( chroot . apt-get update && \
+	    chroot . apt-get -y upgrade && \
+	    chroot . apt-get -y install \
+	    nvi emacs23-nox w3m-el-snapshot \
+	    i2c-tools fbset console-tools \
+	    util-linux task-ssh-server locales openssh-client input-utils \
+	    build-essential less git magit bash-completion \
+	    command-not-found psmisc sysstat strace xnbd-client \
+	    gauche gauche-c-wrapper \
+	    xserver-xorg xserver-xorg-video-fbdev sawfish x11-xserver-utils \
+	    xinit xterm \
+	    conkeror \
+	    wireless-tools wpasupplicant \
+	    firmware-linux firmware-realtek firmware-ralink \
+	    alsa-utils \
+	    avahi-daemon \
+	    debian-goodies \
+	    imagemagick gqview ); do
+	    sleep 1
+	    RETRY=$[RETRY-1]
+	done
+    )
+
+    rm -v etc/resolv.conf
+    # auto-login
+    sed -i 's,1:2345:respawn:/sbin/getty 38400 tty1,1:2345:respawn:/sbin/getty -a root 38400 tty1\
+# show pictures instead of login prompt \
+# 1:2345:respawn:/usr/local/bin/showpics,' \
+	etc/inittab
+
+    # serial auto-login
+    echo T0:2345:respawn:/sbin/getty -L -a root ttyS0 115200 vt100 \
+	>> etc/inittab
+    make -C $KERNELTREEDIR INSTALL_MOD_PATH=`pwd` ARCH=arm \
+	${COMPILE_OPTIONS} modules_install
+    cp -v "$(which olinuxino-a20-micro-image-builder)" usr/local/bin
+    cat <<"EOF" > usr/local/bin/showpics
+#!/bin/bash
+# really ugly hack to show pictures on framebuffer
+W=$(($(cat /sys/class/graphics/fb0/stride)/4))
+H=$(fbset|grep ^mode|sed s,'mode "\([0-9]\+\)x\([0-9]\+\)-\([0-9]\+\)",\2,')
+echo 0 > /sys/devices/virtual/graphics/fbcon/cursor_blink
+cd /home
+while true; do
+    find -iname "*.jpg" \
+         -exec sh -c \
+               'convert "$1" -resize '${W}x${H}' \
+                        -background black \
+                        -gravity center \
+                        -extent '${W}x${H}' BGRA:/dev/fb0 ; \
+                echo 0 > /sys/class/graphics/fb0/blank ; \
+                sleep 1' \
+               -- \{\} \;
+done
+EOF
+    chmod +x usr/local/bin/showpics
+    # announce sftp via avahi (for simple access via gnome/nautilus)
+    cp -v usr/share/doc/avahi-daemon/examples/sftp-ssh.service  etc/avahi/services/
+    rm -v etc/avahi/services/udisks.service
+    popd
+    umount $LOCKDIR/chroot-armhf
+    sync
+    rmdir  $LOCKDIR/chroot-armhf
+
+    # cleanup
+    # todo: should also happen in error case (maybe use trap or use a
+    # better language)
+
+    partx -d $LOOPDEV
+    dd if=~imagebuilder/u-boot-sunxi/u-boot-sunxi-with-spl.bin \
+	of=$LOOPDEV bs=1024 seek=8
+    sync
+    # wtf
+    RETRY="10"
+    while [ $RETRY -gt 0 ] && ! losetup -d $LOOPDEV; do
+	sync
+	sleep 1
+	RETRY=$[RETRY-1]
+    done
+    rmdir $LOCKDIR
+    echo "Your image $CARD is ready."
+}
+
+function assert-not-root {
+    if [ "$(whoami)" = "root" ]; then
+	echo do not run as root
+	exit 1
+    fi
+}
+
+function user-setup {
+    assert-not-root
+    local r
+    for r in sunxi-tools u-boot-sunxi; do
+	test -d "${r}" || \
+	    git clone "https://github.com/linux-sunxi/${r}.git"
+    done
+    test -d sunxi-boards || \
+	git clone "https://github.com/karme/sunxi-boards.git"
+    # todo: use --single-branch ?
+    test -d linux-sunxi || \
+	git clone "https://github.com/karme/linux-sunxi.git" -b stage/sunxi-3.4
+}
+
+function user-compile {
+    assert-not-root
+    # u-boot
+    pushd u-boot-sunxi
+    make distclean ${COMPILE_OPTIONS}
+    make A20-OLinuXino_MICRO ${COMPILE_OPTIONS}
+    popd
+    # kernel
+    pushd linux-sunxi
+    make ARCH=arm mrproper
+    cp -v arch/arm/configs/sun7i_defconfig .config
+    # todo: oldconfig not supported?
+    make ARCH=arm oldconfig
+    make ARCH=arm ${COMPILE_OPTIONS} -j $(nproc) uImage
+    make ARCH=arm ${COMPILE_OPTIONS} -j $(nproc) modules
+    popd
+    # sunxi-tools (todo: maybe make clean on update)
+    make -C sunxi-tools
+    for f in a20-olinuxino_micro.fex a20-olinuxino_micro_lcd_800x480.fex; do
+	./sunxi-tools/fex2bin \
+	    sunxi-boards/sys_config/a20/"$f" \
+	    sunxi-boards/sys_config/a20/"${f%*.fex}.bin"
+    done
+}
+
+function update {
+    sudo -E -H -u imagebuilder -s /bin/sh -c \
+	"cd ~ ; olinuxino-a20-micro-image-builder user-update"
+}
+
+function user-update {
+    assert-not-root
+    local r
+    # only update kernel for now
+    # for r in sunxi-tools sunxi-boards u-boot-sunxi linux-sunxi; do
+    for r in linux-sunxi; do
+	pushd $r
+	git pull
+	git status
+	popd
+    done
+}
+
+function help() {
+    echo "Usage $0 [setup|make-image|update]"
+    sed '/^$/q' < $0|tail -n +2|cut -c 2-
+    cat <<EOF
+sub-commands:
+setup       prepare environment for image build
+make-image  build image
+update      update from git remotes
+
+Example:
+$0 setup
+# ... wait for ca. 30 min (depends mainly on your network connection) ...
+$0 make-image
+# ... wait for ca. 45 min (depending on network and cpu) ...
+# test your new image (dd to sd card)
+# something didn't work and someone fixed it
+$0 update
+# ... wait few seconds ...
+$0 make-image
+# ... wait for ca. 20 min (depending on storage and cpu) ...
+# test your image again and repeat
+EOF
+    exit 1
+}
+
+CMD="$1"
+test -z "$CMD" && help
+shift
+case "$CMD" in
+    setup)
+	setup "$@"
+	;;
+    make-image)
+	make-image "$@"
+	;;
+    user-setup)
+	user-setup "$@"
+	;;
+    user-compile)
+	user-compile "$@"
+	;;
+    update)
+	update "$@"
+	;;
+    user-update)
+	user-update "$@"
+	;;
+    test-run)
+	time $0 setup
+	time $0 make-image
+	time $0 update
+	time $0 make-image
+	;;
+    *)
+	help
+	;;
+esac
