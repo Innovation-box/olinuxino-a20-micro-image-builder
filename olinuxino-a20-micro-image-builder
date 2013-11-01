@@ -115,7 +115,7 @@ function setup {
 	"cd ~ ; olinuxino-a20-micro-image-builder user-setup"
 }
 
-function make-image {
+function build-image {
     local CARD="$1"
     test -z "$1" && CARD="olinuxino-a20-micro-debian.img"
 
@@ -124,6 +124,16 @@ function make-image {
 
     sudo -E -H -u imagebuilder -s /bin/sh -c \
 	"cd ~ ; olinuxino-a20-micro-image-builder user-compile"
+}
+
+function make-image {
+    local CARD="$1"
+    test -z "$1" && CARD="olinuxino-a20-micro-debian.img"
+
+    local LOCKDIR=/run/olinuxino-a20-micro-image-builder
+    #mkdir $LOCKDIR
+
+    # todo : add a test for build-image
 
     # total image size in bytes (for now use <4GB)
     local SIZE=3600000000
@@ -451,6 +461,9 @@ case "$CMD" in
     setup)
 	setup "$@"
 	;;
+    build-image)
+	build-image "$@"
+	;;
     make-image)
 	make-image "$@"
 	;;
@@ -468,6 +481,7 @@ case "$CMD" in
 	;;
     test-run)
 	time $0 setup
+	time $0 build-image
 	time $0 make-image
 	time $0 update
 	time $0 make-image
