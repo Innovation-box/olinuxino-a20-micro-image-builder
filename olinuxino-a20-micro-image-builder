@@ -141,7 +141,7 @@ function make-image {
 
     # use local http proxy (note: we install squid in setup)
     # no use in this action...
-    http_proxy=${http_proxy:-http://localhost:3128}
+    # http_proxy=${http_proxy:-http://localhost:3128}
     #export http_proxy
 
     apt-get install dosfstools util-linux
@@ -213,7 +213,7 @@ EOF
     # todo: maybe extract from localhost?! detect fastest?!
     # (use netselect? apt-spy?)
     #MIRROR="http://ftp.debian.org/debian/"
-    local MIRROR="http://ftp.de.debian.org/debian/"
+    local MIRROR="http://ftp.fr.debian.org/debian/"
 
     # (todo: maybe do not recreate root fs each time?)
     mkdir -p $LOCKDIR/chroot-armhf
@@ -346,6 +346,7 @@ EOF
     popd
     umount $LOCKDIR/chroot-armhf
     sync
+    sleep 5
     rmdir  $LOCKDIR/chroot-armhf
 
     # cleanup
@@ -360,7 +361,7 @@ EOF
     RETRY="10"
     while [ $RETRY -gt 0 ] && ! losetup -d $LOOPDEV; do
 	sync
-	sleep 1
+	sleep 5
 	RETRY=$[RETRY-1]
     done
     rmdir $LOCKDIR
