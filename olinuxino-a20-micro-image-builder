@@ -140,8 +140,9 @@ function make-image {
     local KERNELTREEDIR=~imagebuilder/linux-sunxi
 
     # use local http proxy (note: we install squid in setup)
+    # no use in this action...
     http_proxy=${http_proxy:-http://localhost:3128}
-    export http_proxy
+    #export http_proxy
 
     apt-get install dosfstools util-linux
 
@@ -340,7 +341,8 @@ EOF
     chmod +x usr/local/bin/showpics
     # announce sftp via avahi (for simple access via gnome/nautilus)
     cp -v usr/share/doc/avahi-daemon/examples/sftp-ssh.service  etc/avahi/services/
-    rm -v etc/avahi/services/udisks.service
+    # todo set this in a test way
+    #rm -v etc/avahi/services/udisks.service
     popd
     umount $LOCKDIR/chroot-armhf
     sync
