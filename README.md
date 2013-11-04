@@ -1,3 +1,4 @@
+
 # this script is based on http://linux-sunxi.org/Building_on_Debian and derivated from http://karme.de/olimex/olinuxino-a20-micro-image-builder to
 # create a basic debian image for the olinuxino a20 micro
 # (s.a. http://linux-sunxi.org/A20-OLinuXino)
