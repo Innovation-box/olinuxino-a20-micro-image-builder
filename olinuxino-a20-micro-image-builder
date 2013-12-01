@@ -366,6 +366,7 @@ EOF
     done
     rmdir $LOCKDIR
     echo "Your image $CARD is ready."
+    echo "remember sudo dd if=/dev/sdb of=$CARD bs=1M ;-)"
 }
 
 function assert-not-root {
