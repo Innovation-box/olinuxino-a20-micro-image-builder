@@ -488,6 +488,7 @@ case "$CMD" in
 	time $0 build-image
 	time $0 make-image
 	time $0 update
+	time $0 build-image
 	time $0 make-image
 	;;
     *)
