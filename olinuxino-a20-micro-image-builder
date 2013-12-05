@@ -88,7 +88,7 @@ deb http://www.emdebian.org/debian/ sid main
 EOF
     apt-get -y install emdebian-archive-keyring qemu-user-static
     apt-get update
-    apt-get -y install gcc-4.7-arm-linux-gnueabihf
+    apt-get -y install gcc-4.7-arm-linux-gnueabihf ncurses-dev uboot-mkimage build-essential git
 }
 
 function setup {
@@ -200,9 +200,9 @@ extraargs=hdmi.audio=0 disp.screen0_output_mode=1280x1024p60
 EOF
     # we can pass additional kernel arguments via uEnv.txt
     # example: disable console blank on idle
-    #    cat <<EOF > $LOCKDIR/boot/uEnv.txt
-    #extraargs=consoleblank=0
-    #EOF
+cat <<EOF > $LOCKDIR/boot/uEnv.txt
+extraargs=hdmi.audio=0 disp.screen0_output_mode=1280x1024p60
+EOF
     umount $LOCKDIR/boot
     sync
     rmdir $LOCKDIR/boot
@@ -366,7 +366,7 @@ EOF
     done
     rmdir $LOCKDIR
     echo "Your image $CARD is ready."
-    echo "remember sudo dd if=/dev/sdb of=$CARD bs=1M ;-)"
+    echo "remember sudo dd if=$CARD of=/dev/sdb bs=1M && sync"
 }
 
 function assert-not-root {
@@ -454,6 +454,8 @@ $0 update
 $0 make-image
 # ... wait for ca. 20 min (depending on storage and cpu) ...
 # test your image again and repeat
+also
+# remember sudo dd if=xx.img of=/dev/sdb bs=1M && sync
 EOF
     exit 1
 }
